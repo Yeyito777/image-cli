@@ -45,7 +45,11 @@ interface OpenAIGeneratedImage {
 }
 
 function usage(): string {
-  return `usage: image <command> [args]\n\ncommands:\n  generate [--json] [--out <path>] <prompt>   Generate an image and print the saved path\n  help, -h, --help                            Show this help\n\nThis tool expects daemon-provided OpenAI auth (${OPENAI_AUTH_ARG}).`;
+  return `usage: image <command> [args]\n\ncommands:\n  generate [--json] [--out <path>]   Generate an image from a prompt on stdin\n  help, -h, --help                   Show this help\n\nPrompt input:\n  image generate reads the exact UTF-8 prompt from stdin.\n  Inline prompt arguments are not accepted.\n\nThis tool expects daemon-provided OpenAI auth (${OPENAI_AUTH_ARG}).`;
+}
+
+function generateUsage(): string {
+  return `usage: image generate [--json] [--out <path>]\n\nGenerate an image and print the saved path.\n\nPrompt input:\n  The exact UTF-8 prompt is required on stdin.\n  Inline prompt arguments are not accepted.\n\noptions:\n  --json        Print structured output\n  --out <path>  Save the generated image at this path\n  -h, --help    Show this help`;
 }
 
 function die(message: string, code = 1): never {
@@ -89,8 +93,7 @@ function parseGlobalArgs(argv: string[]): { encodedAuth: string | undefined; res
   return { encodedAuth, rest };
 }
 
-function parseGenerateArgs(args: string[]): { prompt: string; json: boolean; outPath: string | null } {
-  const promptParts: string[] = [];
+export function parseGenerateArgs(args: string[]): { json: boolean; outPath: string | null } {
   let json = false;
   let outPath: string | null = null;
   for (let i = 0; i < args.length; i++) {
@@ -104,15 +107,30 @@ function parseGenerateArgs(args: string[]): { prompt: string; json: boolean; out
       outPath = arg.slice("--out=".length);
       if (!outPath) die("--out requires a path");
     } else if (arg === "-h" || arg === "--help") {
-      console.log(usage());
+      console.log(generateUsage());
       process.exit(0);
     } else {
-      promptParts.push(arg);
+      die("generate prompt must be provided via stdin; inline prompt is not accepted", 2);
     }
   }
-  const prompt = promptParts.join(" ").trim();
-  if (!prompt) die("generate requires a prompt");
-  return { prompt, json, outPath };
+  return { json, outPath };
+}
+
+export function decodePrompt(bytes: Uint8Array): string {
+  if (bytes.byteLength === 0) die("generate prompt is required on stdin", 2);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    die("generate prompt on stdin must be valid UTF-8", 2);
+  }
+}
+
+async function readPromptFromStdin(): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return decodePrompt(Buffer.concat(chunks));
 }
 
 function buildOpenAIHeaders(overrides: Record<string, string> = {}): Record<string, string> {
@@ -305,7 +323,8 @@ async function main(): Promise<void> {
   }
   if (cmd !== "generate") die(`unknown command '${cmd}'. Run image -h for usage.`);
 
-  const { prompt, json, outPath } = parseGenerateArgs(rest);
+  const { json, outPath } = parseGenerateArgs(rest);
+  const prompt = await readPromptFromStdin();
   const auth = decodeOpenAIAuth(encodedAuth);
   const generated = await generateImage(auth, prompt);
   const bytes = Buffer.from(generated.base64, "base64");
@@ -320,4 +339,4 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => die(err instanceof Error ? err.message : String(err)));
+if (import.meta.main) main().catch((err) => die(err instanceof Error ? err.message : String(err)));
