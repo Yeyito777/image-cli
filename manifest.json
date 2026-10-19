@@ -5,8 +5,5 @@
   "display": {
     "label": "Image",
     "color": "#ffb86c"
-  },
-  "auth": {
-    "providers": ["openai"]
   }
 }
